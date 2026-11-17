@@ -11,6 +11,7 @@
   let last = 0;
 
   G.shake = a => { if (a > 0) cam.trauma = Math.min(1, cam.trauma + a); };
+  G.setPause = on => setPause(on);
 
   // ---------- 초기화 ----------
   function init() {
@@ -21,7 +22,7 @@
     G.scene = new T.Scene();
     G.camera = new T.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 1.5, 180000);
     setupComposer();
-    G.world.init(G.scene); G.fx.init(G.scene); G.player.init(G.scene); G.hud.init();
+    G.world.init(G.scene); G.fx.init(G.scene); G.player.init(G.scene); G.hud.init(); G.touchCtl.init();
     G.initInput();
     bindUI();
     window.addEventListener('resize', onResize);
@@ -68,6 +69,7 @@
     on('btn-again', () => startGame(true));
     $('opt-mouse').addEventListener('change', e => { G.opts.mouse = e.target.checked; });
     $('opt-invert').addEventListener('change', e => { G.opts.invertY = e.target.checked; });
+    $('opt-auto').addEventListener('change', e => { G.opts.autoFire = e.target.checked; });
   }
   function showScreen(id) { ['title', 'pause', 'over', 'win'].forEach(s => $(s).classList.toggle('hidden', s !== id)); }
 
@@ -75,6 +77,7 @@
   function startGame(fromStart) {
     const P = G.player;
     G.audio.init(); G.audio.resume(); G.audio.ui();
+    if (G.touchCtl.enabled) G.touchCtl.onStart();
     G.enemies.clear(); G.fx.clearAll(); G.hud.bossBar(false);
     const idx = fromStart ? 0 : mission.checkpoint;
     if (fromStart) { game.score = 0; game.kills = 0; game.playTime = 0; }
@@ -86,7 +89,9 @@
     game.state = 'playing';
     showScreen(null); G.hud.show(true);
     mission.start(idx);
-    if (fromStart) G.hud.hint('Space 사격 · F 유도 미사일 · Shift 부스트 · Q / E 배럴 롤', 9);
+    if (fromStart) G.hud.hint(G.touchCtl.enabled
+      ? '왼쪽 화면을 드래그해 조종 · ' + (G.opts.autoFire ? '적을 조준하면 자동 사격' : '사격 버튼으로 공격')
+      : 'Space 사격 · F 유도 미사일 · Shift 부스트 · Q / E 배럴 롤', 9);
   }
   function setPause(on) {
     if (on && game.state !== 'playing') return;
@@ -101,17 +106,20 @@
     const k = G.input.keys, p = G.input.pressed, m = G.input.mouse;
     let sx = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
     let sy = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0);
+    const TC = G.touchCtl;
+    if (TC.enabled && sx === 0 && sy === 0) { sx = TC.sx; sy = TC.sy; }
     if (G.opts.mouse && sx === 0 && sy === 0) { // 화면 중앙에서 마우스가 벗어난 만큼 조향
       const dz = v => (Math.abs(v) < 0.06 ? 0 : G.clamp((v - Math.sign(v) * 0.06) * 2.4, -1, 1));
       sx = dz(m.x); sy = dz(m.y);
     }
     if (G.opts.invertY) sy = -sy;
     ctl.sx = sx; ctl.sy = sy;
-    ctl.fire = !!(k.Space || k.KeyJ || m.l);
-    ctl.missile = !!(p.KeyF || p.KeyK || p.MouseR);
-    ctl.boost = !!(k.ShiftLeft || k.ShiftRight);
+    TC.autoFiring = TC.enabled && G.opts.autoFire && !TC.fire && !!G.player.assist;   // 터치: 조준 보조 대상이 있으면 자동 사격
+    ctl.fire = !!(k.Space || k.KeyJ || m.l || TC.fire || TC.autoFiring);
+    ctl.missile = !!(p.KeyF || p.KeyK || p.MouseR || p.TouchMissile);
+    ctl.boost = !!(k.ShiftLeft || k.ShiftRight || TC.boost);
     ctl.brake = !!k.KeyX;
-    ctl.rollL = !!p.KeyQ; ctl.rollR = !!p.KeyE;
+    ctl.rollL = !!(p.KeyQ || p.TouchRollL); ctl.rollR = !!(p.KeyE || p.TouchRollR);
   }
   function autoControls() { // 타이틀 · 승리 화면의 자동 비행
     const P = G.player, want = game.state === 'victory' ? game.holdAlt : 1350;
@@ -129,7 +137,7 @@
       c.position.copy(P.pos).add(_v);
       c.lookAt(P.pos);
       if (game.state === 'title') c.rotateY(0.2);   // 타이틀 문구를 피해 기체를 오른쪽에
-      c.fov = G.damp(c.fov, 50, 3, dt);
+      c.fov = G.damp(c.fov, c.aspect < 1 ? 66 : 50, 3, dt);
     } else if (game.state === 'dead') {
       c.position.addScaledVector(cam.deathVel, dt);
       cam.deathVel.multiplyScalar(Math.exp(-1.2 * dt));
@@ -143,7 +151,7 @@
       c.quaternion.setFromEuler(_e);
       _v.set(0, 7.5 - P.ascentK * 2, 31 + P.boostK * 7 - P.ascentK * 5).applyQuaternion(c.quaternion);
       c.position.copy(P.pos).add(_v);
-      c.fov = G.damp(c.fov, 62 + P.boostK * 15 + P.ascentK * 26, 4, dt);
+      c.fov = G.damp(c.fov, (c.aspect < 1 ? 76 : 62) + P.boostK * 15 + P.ascentK * 26, 4, dt);
     }
     if (cam.trauma > 0) { // 화면 흔들림
       const s = cam.trauma * cam.trauma;
@@ -280,7 +288,7 @@
     } else if (ph.kind === 'ascent') {
       hud.msg('대기권을 돌파하라', '기수를 올려 상승 — 고도 20km에서 오버부스트 점화', 5, 'warn');
       hud.phase('대기권 돌파', '우주로 상승하라');
-      hud.hint('W 또는 ↑ 키를 눌러 상승', 8);
+      hud.hint(G.touchCtl.enabled ? '왼쪽 스틱을 위로 밀어 상승' : 'W 또는 ↑ 키를 눌러 상승', 8);
       G.audio.setMood('sky');
     } else {
       hud.msg('경고 — 적 모선 접근', '포탑 4기를 파괴하면 코어가 노출된다', 4.5, 'danger');
@@ -384,10 +392,28 @@
     G.audio.setEngine(G.clamp((P.speed - 100) / 380, 0, 1.6), P.alive);
   }
 
+  // 성능 자동 조절: 플레이 중 프레임이 계속 낮으면 해상도 → 광원 효과 순으로 낮춘다 (휴대폰 대비)
+  const perf = { t: 0, n: 0, wait: 3, level: 2 };
+  function watchPerf(raw) {
+    if (raw > 0.25 || perf.level <= 0) return;   // 탭 전환 등으로 멈췄던 프레임은 제외
+    if (perf.wait > 0) { perf.wait -= raw; return; }
+    perf.t += raw; perf.n++;
+    if (perf.t < 3) return;
+    const fps = perf.n / perf.t;
+    perf.t = perf.n = 0;
+    if (fps >= 45) return;
+    perf.level--; perf.wait = 2;
+    if (perf.level === 1) { G.renderer.setPixelRatio(1); onResize(); }
+    else G.opts.bloom = false;
+    console.info('[성능] 평균 ' + fps.toFixed(0) + 'fps → 화질 단계 ' + perf.level);
+  }
+
   function loop(now) {
     requestAnimationFrame(loop);
-    let dt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
+    const raw = (now - last) / 1000;
+    let dt = Math.min(0.05, Math.max(0.001, raw));
     last = now;
+    if (game.state === 'playing') watchPerf(raw);
     const p = G.input.pressed;
     if (p.KeyP || p.Escape) setPause(game.state === 'playing');
     if (p.KeyM) G.hud.hint(G.audio.toggleMute() ? '음소거' : '소리 켜짐', 1.6);
@@ -399,12 +425,14 @@
       G.time += dt;
       step(dt);
     }
+    G.touchCtl.update();   // 일시정지 중에도 터치 버튼 표시 상태를 맞춘다
     render();
     G.input.pressed = {};
   }
 
   // 점검용 도구 (콘솔에서 사용): 특정 구간으로 건너뛰기
   G.debug = {
+    perf,
     skip(idx) {
       G.enemies.clear(); G.fx.clearAll(); G.hud.bossBar(false);
       G.player.pos.y = PHASES[idx].zone === 'space' ? 7650 : 1300;

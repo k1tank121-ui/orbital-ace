@@ -2,7 +2,7 @@
 /* 공용 도구: 수학 헬퍼, 상수, 절차적 텍스처, 입력, 지오메트리 헬퍼 */
 (function () {
   const T = THREE;
-  const G = (window.G = { time: 0, opts: { mouse: false, invertY: false, bloom: true } });
+  const G = (window.G = { time: 0, opts: { mouse: false, invertY: false, bloom: true, autoFire: true } });
 
   // ---------- 수학 ----------
   G.rand = (a = 1, b) => (b === undefined ? Math.random() * a : a + Math.random() * (b - a));
@@ -144,7 +144,8 @@
   };
 
   // ---------- 입력 ----------
-  const input = (G.input = { keys: {}, pressed: {}, mouse: { x: 0, y: 0, l: false, r: false } });
+  const input = (G.input = { keys: {}, pressed: {}, mouse: { x: 0, y: 0, l: false, r: false }, lastTouch: -1e9 });
+  const fromTouch = () => performance.now() - input.lastTouch < 900;   // 터치 직후 브라우저가 흉내 내는 마우스 이벤트
   G.initInput = function () {
     const block = ['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'];
     window.addEventListener('keydown', e => {
@@ -155,11 +156,13 @@
     window.addEventListener('keyup', e => { input.keys[e.code] = false; });
     window.addEventListener('blur', () => { input.keys = {}; input.mouse.l = input.mouse.r = false; });
     window.addEventListener('mousemove', e => {
+      if (fromTouch()) return;
       input.mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
       input.mouse.y = -((e.clientY / window.innerHeight) * 2 - 1);
     });
     window.addEventListener('mousedown', e => {
-      if (e.target && e.target.closest && e.target.closest('.screen')) return; // 메뉴 클릭은 무시
+      if (e.target && e.target.closest && e.target.closest('.screen, #touch')) return; // 메뉴 · 터치 버튼 클릭은 무시
+      if (fromTouch()) return;
       if (e.button === 0) input.mouse.l = true;
       if (e.button === 2) { input.mouse.r = true; input.pressed.MouseR = true; }
     });
